@@ -18,7 +18,7 @@ export function matchOrder(limitPrice: number, order: OrderRecord, streamMsgId: 
 
       touchedAskPrices.push(askPrice);
       for (const restingOrder of restingOrders) {
-        if (remainingQty <= 0) return { break: 0 };
+        if (remainingQty <= 0) break;
         const remainingFillQty = restingOrder.qty - restingOrder.filledQty;
         const fillQty = Math.min(remainingFillQty, remainingQty);
 

@@ -1302,6 +1302,75 @@ describe("engine commands", () => {
     expect(MARK_PRICE_EWMA.has("UNTRADED-USD")).toBe(false);
     expect(FUNDING_RATE_ACCOUMILATOR.has("UNTRADED-USD")).toBe(false);
   });
+
+  it("removes a fully filled ask from the book when the buy exhausts exactly at it", () => {
+    engineCommand("create_market", {
+      marketId: "exhaust-market",
+      symbol: "EXHAUST-USD",
+      maxLeverage: 10,
+      minQty: 1,
+    });
+    engineCommand("add_balance", { userId: "exhaust-maker-a", amount: 10_000 });
+    engineCommand("add_balance", { userId: "exhaust-maker-b", amount: 10_000 });
+    engineCommand("add_balance", { userId: "exhaust-buyer", amount: 10_000 });
+
+    engineCommand("create_order", {
+      userId: "exhaust-maker-a", symbol: "EXHAUST-USD",
+      orderType: "limit", side: "sell", price: 100, qty: 2, leverage: 1,
+    });
+    const secondAsk = engineCommand("create_order", {
+      userId: "exhaust-maker-b", symbol: "EXHAUST-USD",
+      orderType: "limit", side: "sell", price: 100, qty: 3, leverage: 1,
+    });
+
+    engineCommand("create_order", {
+      userId: "exhaust-buyer", symbol: "EXHAUST-USD",
+      orderType: "limit", side: "buy", price: 100, qty: 2, leverage: 1,
+    });
+    expect(engineCommand("get_depth", { symbol: "EXHAUST-USD" }).asks).toEqual([[100, 3]]);
+
+    // a filled ask left in the book would show up here as a qty-0 fill
+    const next = engineCommand("create_order", {
+      userId: "exhaust-buyer", symbol: "EXHAUST-USD",
+      orderType: "limit", side: "buy", price: 100, qty: 1, leverage: 1,
+    });
+    expect(next.fills).toHaveLength(1);
+    expect(next.fills[0].qty).toBe(1);
+    expect(next.fills[0].makerOrderId).toBe(secondAsk.order.orderId);
+  });
+
+  it("reduces a position built at two prices without throwing and settles PnL against the averaged entry", () => {
+    engineCommand("create_market", {
+      marketId: "avg-market",
+      symbol: "AVG-USD",
+      maxLeverage: 10,
+      minQty: 1,
+    });
+    engineCommand("add_balance", { userId: "avg-trader", amount: 1_000_000 });
+    engineCommand("add_balance", { userId: "avg-mm", amount: 1_000_000 });
+
+    const order = (userId: string, side: "buy" | "sell", price: number, qty: number) =>
+      engineCommand("create_order", {
+        userId, symbol: "AVG-USD", orderType: "limit", side, price, qty, leverage: 1,
+      });
+
+    order("avg-mm", "sell", 100, 1);
+    order("avg-trader", "buy", 100, 1);
+    order("avg-mm", "sell", 103, 2);
+    order("avg-trader", "buy", 103, 2);
+    // (1*100 + 2*103) / 3 = 102
+    expect(POSITIONS.get("avg-trader")?.get("AVG-USD")).toMatchObject({ qty: 3, averagePrice: 102 });
+
+    order("avg-mm", "buy", 104, 1);
+    const reduce = order("avg-trader", "sell", 104, 1);
+
+    expect(reduce.order.status).toBe("filled");
+    const takerClose = reduce.closedPositions.find((c: PositionClose) => c.userId === "avg-trader");
+    expect(takerClose).toMatchObject({ closeType: "reduce", entryPrice: 102, exitPrice: 104, qty: 1, realizedPnl: 2 });
+    expect(POSITIONS.get("avg-trader")?.get("AVG-USD")).toMatchObject({ qty: 2, averagePrice: 102 });
+    // starting balance + 2 PnL; the remaining 2 @ 102 stay locked
+    expect(engineCommand("get_balance", { userId: "avg-trader" })).toEqual({ available: 999_798, locked: 204 });
+  });
 });
 
 describe("balance settlement on position close", () => {
