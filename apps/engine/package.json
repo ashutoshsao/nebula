@@ -9,7 +9,8 @@
   "license": "MIT",
   "scripts": {
     "lint": "eslint \"**/*.ts\"",
-    "dev": "bun index.ts"
+    "dev": "bun index.ts",
+    "bench": "bun bench/matching.bench.ts"
   },
   "devDependencies": {
     "@repo/eslint-config": "*",

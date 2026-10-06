@@ -1,6 +1,6 @@
 # Nebula
 
-A TypeScript/Bun playground for the core of a perpetual futures exchange: an HTTP API at the edge, Redis Streams as the command bus, and a single in-memory matching engine that owns all trading state.
+The core of a perpetual-futures exchange in TypeScript/Bun, live at [nebula.ashutoshsao.com](https://nebula.ashutoshsao.com/trade/BTC-PERP): an HTTP API at the edge, Redis Streams as the command bus, and a single in-memory matching engine that owns all trading state.
 
 Covers matching, margin locks, position netting, liquidation, funding-rate settlement, and snapshot recovery.
 
@@ -33,6 +33,19 @@ Engine state lives in memory:
 - Simple market-maker + degen taker bots for local liquidity
 - Engine snapshots persisted to Cloudflare R2, with stream-ID recovery on restart
 - Integration tests across API + engine
+
+## Performance
+
+The matching engine handles **~200k orders/sec with p99 ~40µs** over 1M orders (in-process, Apple Silicon laptop, no Redis or network). Reproduce with:
+
+```sh
+cd apps/engine && bun run bench          # 1M orders by default
+bun run bench 100000                     # or pass an order count
+```
+
+The benchmark ([apps/engine/bench/matching.bench.ts](./apps/engine/bench/matching.bench.ts)) seeds a book, then sends a deterministic mix of 80% limit orders (many crossing) and 20% market orders through `handleCommand`.
+
+Writing it exposed a bug: when a buy ran out partway through a price level, the asks it had filled at that level were never removed from the book, producing zero-quantity fills and slowing every later buy. Fixing it (25218b0) took throughput from ~11k to ~320k orders/sec on 100k orders.
 
 ## Monorepo Map
 
