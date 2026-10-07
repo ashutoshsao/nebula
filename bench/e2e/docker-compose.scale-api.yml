@@ -1,0 +1,4 @@
+# Lets the api service scale (drops the fixed host port). k6 reaches replicas via Docker DNS (http://api:4000).
+services:
+  api:
+    ports: !reset []

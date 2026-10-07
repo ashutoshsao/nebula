@@ -1,0 +1,12 @@
+# Benchmark overrides. Use with a separate project name so volumes are fresh:
+#   docker compose -p nebula-bench -f docker-compose.yml -f bench/e2e/docker-compose.bench.yml \
+#     up -d --build redis timescaledb migrate engine api db-poller
+services:
+  engine:
+    environment:
+      # Point snapshots at a bucket that doesn't exist: start from an empty book and never
+      # read or write the real dev/prod snapshot buckets. Snapshot errors are caught and logged.
+      R2_BUCKET: nebula-bench-no-such-bucket
+  api:
+    environment:
+      ACCESS_TOKEN_TTL: 4h
