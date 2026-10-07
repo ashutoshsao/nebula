@@ -25,6 +25,8 @@ let lastSnapshotTime = Date.now()
 
 //snapshot every 5 mins
 const SNAPSHOT_INTERVAL = 5 * 60 * 1000
+// Commands read per XREAD round trip.
+const READ_BATCH = 500
 
 async function startUp() {
   //loadSnapshot
@@ -39,9 +41,12 @@ async function startUp() {
       id: lastSeenId
     }], {
       BLOCK: 0,
-      COUNT: 1
+      COUNT: READ_BATCH
     }) as RedisResponseType | null;
     if (!streams) continue;
+    // Writes for the whole batch are sent without waiting on each one (the client pipelines them
+    // in order on one connection) and awaited together before the next read or snapshot.
+    const pending: Promise<unknown>[] = [];
     for (const stream of streams) {
       for (const msg of stream.messages) {
         lastSeenId = msg.id;
@@ -64,11 +69,11 @@ async function startUp() {
 
             // mark price is ephemeral — fire-and-forget pub/sub, never the durable event log
             const time = parseInt(`${msg.id.split("-")[0]}`);
-            await writeRedis.publish(`market:${symbol}:markPrice`, JSON.stringify({
+            pending.push(writeRedis.publish(`market:${symbol}:markPrice`, JSON.stringify({
               symbol,
               price: markPrice,
               time
-            }))
+            })))
 
             // not awaited: runs every price tick, can't afford a redis round trip here
             writeRedis.set(REDIS_KEYS.predictedFunding(symbol), JSON.stringify({
@@ -80,7 +85,7 @@ async function startUp() {
 
             // the durable stream only sees ticks that carry liquidation/ADL events
             if (events.length > 0) {
-              await writeRedis.xAdd(REDIS_KEYS.engineEvents, '*', {
+              pending.push(writeRedis.xAdd(REDIS_KEYS.engineEvents, '*', {
                 type,
                 correlationId,
                 ok: 'true',
@@ -88,7 +93,7 @@ async function startUp() {
                 data: JSON.stringify(response),
               }, {
                 TRIM: { strategy: 'MAXLEN', strategyModifier: '~', threshold: 10_000 }
-              })
+              }))
 
               for (const event of events) {
                 evictIfTerminal(event.order);
@@ -100,7 +105,7 @@ async function startUp() {
 
           if (GLOBAL_EVENTS.has(type)) {
             // create_order, cancel_order, create_market,
-            await writeRedis.xAdd(REDIS_KEYS.engineEvents, '*', {
+            pending.push(writeRedis.xAdd(REDIS_KEYS.engineEvents, '*', {
               type,
               correlationId,
               ok: 'true',
@@ -108,7 +113,7 @@ async function startUp() {
               data: JSON.stringify(response),
             }, {
               TRIM: { strategy: 'MAXLEN', strategyModifier: '~', threshold: 10_000 }
-            })
+            }))
 
             if (type === "create_order") {
               const { order, makerOrders } = response as CreateOrderResponse;
@@ -119,7 +124,7 @@ async function startUp() {
               evictIfTerminal(order);
             }
           } else {
-            await writeRedis.xAdd(responseQueue, '*', {
+            pending.push(writeRedis.xAdd(responseQueue, '*', {
               type,
               correlationId,
               ok: 'true',
@@ -127,14 +132,14 @@ async function startUp() {
               data: JSON.stringify(response),
             }, {
               TRIM: { strategy: 'MAXLEN', strategyModifier: '~', threshold: 100 }
-            })
+            }))
             // caller's process may never come back to read this (crash/restart) —
             // let the queue self-destruct instead of leaking forever
-            await writeRedis.expire(responseQueue, 300)
+            pending.push(writeRedis.expire(responseQueue, 300))
           }
         }
         catch (err) {
-          await writeRedis.xAdd(responseQueue, '*', {
+          pending.push(writeRedis.xAdd(responseQueue, '*', {
             type,
             correlationId,
             ok: 'false',
@@ -142,11 +147,12 @@ async function startUp() {
             data: '',
           }, {
             TRIM: { strategy: 'MAXLEN', strategyModifier: '~', threshold: 100 }
-          })
-          await writeRedis.expire(responseQueue, 300)
+          }))
+          pending.push(writeRedis.expire(responseQueue, 300))
         }
       }
     }
+    await Promise.all(pending);
     if (Date.now() - lastSnapshotTime > SNAPSHOT_INTERVAL) {
       try {
         await saveSnapshot(lastSeenId)
@@ -154,6 +160,9 @@ async function startUp() {
         // safe to drop anything older than what's now durably snapshotted
         await writeRedis.xTrim(REDIS_KEYS.engineCommands, 'MINID', lastSeenId)
       } catch (err) {
+        // Wait a full interval before retrying. Without this the check stays true and every
+        // subsequent command retries the R2 upload inside the matching loop.
+        lastSnapshotTime = Date.now()
         console.log(`Snapshot save failed, will retry next interval: ${(err as Error).message}`)
       }
     }

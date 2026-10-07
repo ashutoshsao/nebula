@@ -51,7 +51,7 @@ async function waitForResponse() {
     const streams = await redis.xRead([
       { key: REDIS_KEYS.engineEvents, id: lastGlobalId },
       { key: REDIS_KEYS.responseQueue(responseBe), id: lastBackendId },
-    ], { BLOCK: 0, COUNT: 1 })
+    ], { BLOCK: 0, COUNT: 500 }) // batch: one round trip per up-to-500 messages per stream
 
     if (!streams) continue;
 
@@ -64,6 +64,9 @@ async function waitForResponse() {
         }
 
         const raw = msg.message;
+        // Most global events belong to other API instances: check ownership before parsing.
+        const pending = loopbackResponses.get(raw.correlationId);
+        if (!pending) continue;
         const engineResponse: EngineResponse = {
           type: raw.type as EngineCommandType,
           correlationId: raw.correlationId,
@@ -71,8 +74,6 @@ async function waitForResponse() {
           data: raw.data ? JSON.parse(raw.data) : undefined,
           error: raw.error || undefined
         }
-        const pending = loopbackResponses.get(engineResponse.correlationId);
-        if (!pending) continue;
 
         clearTimeout(pending.timeout);
         engineResponse.ok

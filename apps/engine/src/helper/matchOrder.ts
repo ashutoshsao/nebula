@@ -1,5 +1,17 @@
-import { Fill, OrderRecord } from "@repo/types";
+import { Fill, OrderRecord, RestingOrder } from "@repo/types";
 import { ORDERBOOKS } from "../engine-store";
+
+// Compacts a price level in place, dropping filled orders while keeping FIFO order.
+// Avoids allocating a new array per touched level on every match. Returns the new length.
+function removeFilledInPlace(orders: RestingOrder[]): number {
+  let write = 0;
+  for (let read = 0; read < orders.length; read++) {
+    const order = orders[read]!;
+    if (order.filledQty < order.qty) orders[write++] = order;
+  }
+  orders.length = write;
+  return write;
+}
 
 export function matchOrder(limitPrice: number, order: OrderRecord, streamMsgId: string) {
   let orderbook = ORDERBOOKS.get(order.symbol);
@@ -45,12 +57,7 @@ export function matchOrder(limitPrice: number, order: OrderRecord, streamMsgId: 
         else if (restingOrder.filledQty === 0) restingOrder.status = "open";
         else restingOrder.status = "partially_filled";
       }
-      const remainingRestingOrders = restingOrders.filter((order) => order.filledQty < order.qty);
-      if (remainingRestingOrders.length === 0) {
-        orderbook.asks.delete(askPrice);
-      } else {
-        orderbook.asks.set(askPrice, remainingRestingOrders);
-      }
+      if (removeFilledInPlace(restingOrders) === 0) orderbook.asks.delete(askPrice);
     })
   } else {
     //sell
@@ -88,12 +95,7 @@ export function matchOrder(limitPrice: number, order: OrderRecord, streamMsgId: 
         else if (restingOrder.filledQty === 0) restingOrder.status = "open";
         else restingOrder.status = "partially_filled";
       }
-      const remainingRestingOrders = restingOrders.filter((order) => order.filledQty < order.qty);
-      if (remainingRestingOrders.length === 0) {
-        orderbook.bids.delete(bidPrice);
-      } else {
-        orderbook.bids.set(bidPrice, remainingRestingOrders);
-      }
+      if (removeFilledInPlace(restingOrders) === 0) orderbook.bids.delete(bidPrice);
     }
   }
   return { fills, remainingQty, totalCost, touchedAskPrices, touchedBidPrices };
