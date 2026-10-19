@@ -25,6 +25,17 @@ const AXIS_TEXT = "#5c6068";
 const MARK_LINE_COLOR = "#3b82f6";
 const INDEX_LINE_COLOR = "#a855f7";
 
+// lightweight-charts paints to a canvas, so it can't use CSS variables directly: read the
+// theme tokens from index.css (falling back to the dark values) and re-read them whenever
+// <html data-theme> changes.
+function themeColors() {
+  const css = getComputedStyle(document.documentElement);
+  return {
+    grid: css.getPropertyValue("--color-border-soft").trim() || GRID,
+    text: css.getPropertyValue("--color-text-dim").trim() || AXIS_TEXT,
+  };
+}
+
 function toTime(bucket: string): UTCTimestamp {
   return Math.floor(new Date(bucket).getTime() / 1000) as UTCTimestamp;
 }
@@ -182,20 +193,21 @@ export function PriceChart({
     const el = containerRef.current;
     if (!el) return;
 
+    const colors = themeColors();
     const chart = createChart(el, {
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
-        textColor: AXIS_TEXT,
+        textColor: colors.text,
         fontFamily: "Inter, sans-serif",
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: GRID },
-        horzLines: { color: GRID },
+        vertLines: { color: colors.grid },
+        horzLines: { color: colors.grid },
       },
-      rightPriceScale: { borderColor: GRID },
+      rightPriceScale: { borderColor: colors.grid },
       timeScale: {
-        borderColor: GRID,
+        borderColor: colors.grid,
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 5,
@@ -225,7 +237,19 @@ export function PriceChart({
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
 
+    const themeObserver = new MutationObserver(() => {
+      const { grid, text } = themeColors();
+      chart.applyOptions({
+        layout: { textColor: text },
+        grid: { vertLines: { color: grid }, horzLines: { color: grid } },
+        rightPriceScale: { borderColor: grid },
+        timeScale: { borderColor: grid },
+      });
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
     return () => {
+      themeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
