@@ -34,5 +34,6 @@ export async function health(_req: Request, res: Response) {
     check("engine", () => loopback("get_depth", { symbol: "BTC-PERP" })),
   ]));
   const ok = Object.values(checks).every((c) => c.ok);
-  res.status(ok ? 200 : 503).json({ status: ok ? "ok" : "degraded", checks });
+  const version = { version: process.env.VERSION ?? "dev", commit: process.env.GIT_SHA ?? "unknown" };
+  res.status(ok ? 200 : 503).json({ status: ok ? "ok" : "degraded", ...version, checks });
 }

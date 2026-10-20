@@ -1,7 +1,15 @@
 name: Build and push Docker images
 
+# Image tags (docker/metadata-action, the same scheme as tradio):
+#   every build      <image>:<full commit sha>
+#   git tag v1.2.0   also :1.2.0   (one version for all six services; deploy only the ones that changed)
+#   main             also :latest  (convenience only)
+# The ops manifests pin a version or a sha, never :latest: deploying is `kubectl apply -f` with a new tag,
+# and a rollback is the previous tag. Only main and version tags build, so :latest can't move to a feature branch.
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
@@ -27,6 +35,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ matrix.image }}
+          flavor: latest=false
+          tags: |
+            type=sha,format=long,prefix=
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -42,6 +61,9 @@ jobs:
           context: .
           file: apps/${{ matrix.service }}/Dockerfile
           push: true
-          tags: |
-            ${{ matrix.image }}:latest
-            ${{ matrix.image }}:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GET /health reports which version is running (the status page and valor show it)
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            GIT_SHA=${{ github.sha }}
