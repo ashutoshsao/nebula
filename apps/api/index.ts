@@ -1,6 +1,7 @@
 import express from "express"
 import { Env } from "./utils/config";
 import { appRouter } from "./route";
+import { health } from "./handler/health";
 const app = express();
 app.use(express.json());
 app.use((req, res, next) => {
@@ -16,6 +17,7 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get("/health", health); // the status page's deep check (database, Redis, engine)
 app.use("/api", appRouter);
 
 app.listen(Env.PORT, () => {
