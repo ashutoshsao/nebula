@@ -2,6 +2,7 @@ import express from "express"
 import { Env } from "./utils/config";
 import { appRouter } from "./route";
 import { health } from "./handler/health";
+import { workers } from "./handler/workers";
 const app = express();
 app.use(express.json());
 app.use((req, res, next) => {
@@ -18,6 +19,7 @@ app.use((req, res, next) => {
 });
 
 app.get("/health", health); // the status page's deep check (database, Redis, engine)
+app.get("/health/workers", workers); // price-feeder, market-maker, db-poller, wss: fresh work, not just up
 app.use("/api", appRouter);
 
 app.listen(Env.PORT, () => {
