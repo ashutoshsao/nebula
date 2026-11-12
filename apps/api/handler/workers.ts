@@ -3,7 +3,7 @@ import { REDIS_KEYS } from "@repo/types";
 import { Request, Response } from "express";
 
 // Health of the background workers that have no URL of their own (price-feeder, market-maker, db-poller, wss),
-// read from the engine's event stream: each one either writes to it or consumes it, so its freshness shows
+// read from Redis command/event streams: each one writes or consumes work, so freshness shows
 // whether the worker is doing its job, not just whether its process is up. A worker can be running and still
 // dead: the price-feeder once kept running for ~31 hours after Binance dropped its socket.
 let redisPromise: ReturnType<typeof getRedisClient> | undefined; // connected on first request (tests import this file)
@@ -41,11 +41,11 @@ function consumer(lastId: string, group: Group | undefined): Check {
 }
 
 // Pure, so it can be tested without Redis.
-export function workerChecks(now: number, events: Event[], groups: Group[]): Record<string, Check> {
+export function workerChecks(now: number, events: Event[], groups: Group[], priceCommands: Event[] = events): Record<string, Check> {
   const lastId = events[0]?.id ?? "0-0";
   const group = (name: string) => groups.find((g) => g.name === name);
   return {
-    "price-feeder": fresh(now, newest(events, "update_index_price"), PRICE_MAX_AGE_MS, "index price"),
+    "price-feeder": fresh(now, newest(priceCommands, "update_index_price"), PRICE_MAX_AGE_MS, "index price"),
     "market-maker": fresh(now, newest(events, "create_order"), ORDER_MAX_AGE_MS, "order"),
     "db-poller": consumer(lastId, group("db-poller")),
     wss: consumer(lastId, group("wss")),
@@ -55,14 +55,18 @@ export function workerChecks(now: number, events: Event[], groups: Group[]): Rec
 export async function workers(_req: Request, res: Response) {
   try {
     const redis = await (redisPromise ??= getRedisClient());
-    const [events, groups] = await Promise.all([
+    const [events, groups, priceCommands] = await Promise.all([
       redis.xRevRange(REDIS_KEYS.engineEvents, "+", "-", { COUNT: SCAN }),
       redis.xInfoGroups(REDIS_KEYS.engineEvents),
+      // Ordinary price ticks are ephemeral engine output; only ticks carrying
+      // liquidations reach engineEvents. Check input commands for feeder freshness.
+      redis.xRevRange(REDIS_KEYS.engineCommands, "+", "-", { COUNT: SCAN }),
     ]);
     const checks = workerChecks(
       Date.now(),
       events as Event[],
       groups.map((g) => ({ name: String(g.name), pending: Number(g.pending), lastDeliveredId: String(g["last-delivered-id"]) })),
+      priceCommands as Event[],
     );
     const ok = Object.values(checks).every((c) => c.ok);
     res.status(ok ? 200 : 503).json({ status: ok ? "ok" : "degraded", checks });

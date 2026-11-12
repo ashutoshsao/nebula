@@ -16,6 +16,13 @@ describe("workerChecks", () => {
     expect(Object.values(checks).every((c) => c.ok)).toBe(true);
   });
 
+  test("uses fresh input ticks even when no liquidation price event was emitted", () => {
+    const events = [ev(1, "create_order")];
+    const commands = [ev(1, "update_index_price")];
+    expect(workerChecks(NOW, events, groups(events[0]!.id), commands)["price-feeder"]!.ok).toBe(true);
+    expect(workerChecks(NOW, [ev(1, "update_index_price")], [], [ev(90, "update_index_price")])["price-feeder"]!.ok).toBe(false);
+  });
+
   test("stale prices: the feeder is up but publishing nothing", () => {
     const checks = workerChecks(NOW, [ev(1, "create_order"), ev(90, "update_index_price")], groups(`${NOW - 1000}-0`));
     expect(checks["price-feeder"]!.ok).toBe(false);

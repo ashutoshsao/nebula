@@ -5,7 +5,7 @@ export const subscribedMarkets = new Set<string>();
 // both feed off Binance's BTCUSDT) — fan out to every market on that feed symbol,
 // don't just keep the last one
 const feedSymbolToMarketSymbols = new Map<string, Set<string>>();
-const subscribedFeedSymbols = new Set<string>();
+let socketSubscriptions = new WeakMap<WebSocket, Set<string>>();
 
 let subscribeId = 1
 
@@ -21,7 +21,6 @@ export function getFeedSymbolForMarketSymbol(symbol: string) {
 }
 
 export function newMarket(ws: WebSocket, symbol: string) {
-  if (subscribedMarkets.has(symbol)) return;
   const feedSymbol = getFeedSymbolForMarketSymbol(symbol);
 
   const marketsOnFeed = feedSymbolToMarketSymbols.get(feedSymbol) ?? new Set<string>();
@@ -29,8 +28,10 @@ export function newMarket(ws: WebSocket, symbol: string) {
   feedSymbolToMarketSymbols.set(feedSymbol, marketsOnFeed);
   subscribedMarkets.add(symbol);
 
-  if (subscribedFeedSymbols.has(feedSymbol)) return; // already streaming this Binance symbol
-  subscribedFeedSymbols.add(feedSymbol);
+  const subscriptions = socketSubscriptions.get(ws) ?? new Set<string>();
+  socketSubscriptions.set(ws, subscriptions);
+  if (subscriptions.has(feedSymbol)) return;
+  subscriptions.add(feedSymbol);
 
   ws.send(JSON.stringify({
     method: "SUBSCRIBE",
@@ -46,6 +47,6 @@ export function getMarketSymbolsForFeedSymbol(feedSymbol: string) {
 /** test-only: clears all module-level subscription state */
 export function resetPriceFeederState() {
   subscribedMarkets.clear();
-  subscribedFeedSymbols.clear();
+  socketSubscriptions = new WeakMap();
   feedSymbolToMarketSymbols.clear();
 }
